@@ -6,6 +6,10 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and 
 
 ## [Unreleased]
 
+## [0.1.0] - 2026-10-17
+
+First release.
+
 ### Added
 
 - Tray app that switches Windows 11 light/dark mode (apps, taskbar and Start) automatically:
@@ -22,4 +26,5 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and 
 - Re-checks immediately after waking from sleep or a clock change, and notices time zone changes
   (e.g. after travel) without a restart.
 
-[Unreleased]: https://github.com/apictapx/themeswitch/commits/main
+[Unreleased]: https://github.com/apictapx/themeswitch/compare/v0.1.0...HEAD
+[0.1.0]: https://github.com/apictapx/themeswitch/releases/tag/v0.1.0

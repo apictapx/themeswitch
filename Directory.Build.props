@@ -1,7 +1,7 @@
 <Project>
   <PropertyGroup>
     <!-- Release builds override this from the git tag: -p:Version=1.2.3 -->
-    <Version>0.1.0-dev</Version>
+    <Version>0.2.0-dev</Version>
     <Nullable>enable</Nullable>
     <ImplicitUsings>enable</ImplicitUsings>
     <LangVersion>latest</LangVersion>

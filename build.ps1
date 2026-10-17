@@ -3,12 +3,12 @@
     Test, publish and zip ThemeSwitch into dist/. The release workflow runs this same script.
 
 .EXAMPLE
-    ./build.ps1                      # tests + dist/ThemeSwitch-v0.1.0-dev-win-x64.zip
+    ./build.ps1                      # tests + dist/ThemeSwitch-v0.2.0-dev-win-x64.zip
     ./build.ps1 -Version 1.2.0       # what CI does for tag v1.2.0
     ./build.ps1 -SkipTests -Install  # quick local build, copied to %LOCALAPPDATA%\ThemeSwitch
 #>
 param(
-    [string]$Version = "0.1.0-dev",
+    [string]$Version = "0.2.0-dev",
     [string]$Configuration = "Release",
     [switch]$SkipTests,
     [switch]$Install

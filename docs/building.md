@@ -19,7 +19,7 @@ cd themeswitch
 
 | Parameter | Default | |
 |---|---|---|
-| `-Version` | `0.1.0-dev` | Stamped into the exe and the zip name |
+| `-Version` | `0.2.0-dev` | Stamped into the exe and the zip name |
 | `-Configuration` | `Release` | |
 | `-SkipTests` | off | Skip `dotnet test` |
 | `-Install` | off | Stop the installed copy, replace it, start it again |
@@ -27,9 +27,9 @@ cd themeswitch
 Output in `dist/` (git-ignored):
 
 ```text
-dist/ThemeSwitch-v0.1.0-dev-win-x64/        ThemeSwitch.exe + README, LICENSE, CHANGELOG
-dist/ThemeSwitch-v0.1.0-dev-win-x64.zip
-dist/ThemeSwitch-v0.1.0-dev-win-x64.zip.sha256
+dist/ThemeSwitch-v0.2.0-dev-win-x64/        ThemeSwitch.exe + README, LICENSE, CHANGELOG
+dist/ThemeSwitch-v0.2.0-dev-win-x64.zip
+dist/ThemeSwitch-v0.2.0-dev-win-x64.zip.sha256
 ```
 
 ## From WSL
