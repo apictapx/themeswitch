@@ -1,0 +1,15 @@
+<Project>
+  <PropertyGroup>
+    <!-- Release builds override this from the git tag: -p:Version=1.2.3 -->
+    <Version>0.1.0-dev</Version>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <LangVersion>latest</LangVersion>
+    <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
+    <Authors>apictapx</Authors>
+    <Product>ThemeSwitch</Product>
+    <Copyright>Copyright (c) 2026 apictapx</Copyright>
+    <RepositoryUrl>https://github.com/apictapx/themeswitch</RepositoryUrl>
+    <SatelliteResourceLanguages>en</SatelliteResourceLanguages>
+  </PropertyGroup>
+</Project>

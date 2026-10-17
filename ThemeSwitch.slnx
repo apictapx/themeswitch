@@ -1,0 +1,10 @@
+<Solution>
+  <Folder Name="/src/">
+    <Project Path="src/ThemeSwitch.Core/ThemeSwitch.Core.csproj" />
+    <Project Path="src/ThemeSwitch/ThemeSwitch.csproj" />
+  </Folder>
+  <Folder Name="/tests/">
+    <Project Path="tests/ThemeSwitch.Core.Tests/ThemeSwitch.Core.Tests.csproj" />
+    <Project Path="tests/ThemeSwitch.E2E/ThemeSwitch.E2E.csproj" />
+  </Folder>
+</Solution>

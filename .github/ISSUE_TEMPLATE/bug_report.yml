@@ -1,0 +1,34 @@
+name: Bug report
+description: The theme switched when it shouldn't have, didn't switch, or something broke.
+labels: [bug]
+body:
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened, and what did you expect?
+      placeholder: "At 09:30 it switched to light although it was pouring outside."
+    validations:
+      required: true
+  - type: textarea
+    id: report
+    attributes:
+      label: Output of `ThemeSwitch.exe --report`
+      description: Contains your approximate location; trim it if you prefer.
+      render: json
+  - type: textarea
+    id: log
+    attributes:
+      label: Last lines of `%APPDATA%\ThemeSwitch\themeswitch.log`
+      render: text
+  - type: input
+    id: version
+    attributes:
+      label: ThemeSwitch version
+      description: "`ThemeSwitch.exe --version`, or right-click the tray icon → About."
+    validations:
+      required: true
+  - type: input
+    id: windows
+    attributes:
+      label: Windows version
+      placeholder: "Windows 11 24H2 (26100)"

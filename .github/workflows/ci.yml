@@ -1,0 +1,30 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-dotnet@v6
+        with:
+          dotnet-version: 10.0.x
+
+      # Unit tests plus end-to-end tests that drive the real exe against a sandbox registry key.
+      - name: Test and package
+        shell: pwsh
+        run: ./build.ps1 -Version 0.0.0-ci.${{ github.run_number }}
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: ThemeSwitch-ci-${{ github.run_number }}
+          path: dist/*.zip
+          retention-days: 14

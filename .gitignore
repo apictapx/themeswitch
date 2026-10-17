@@ -1,0 +1,9 @@
+bin/
+obj/
+dist/
+TestResults/
+*.user
+.vs/
+.vscode/
+.idea/
+release-notes.md

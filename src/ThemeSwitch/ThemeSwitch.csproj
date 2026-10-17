@@ -1,0 +1,18 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <TargetFramework>net10.0-windows</TargetFramework>
+    <UseWindowsForms>true</UseWindowsForms>
+    <AssemblyName>ThemeSwitch</AssemblyName>
+    <RootNamespace>ThemeSwitch</RootNamespace>
+    <ApplicationIcon>app.ico</ApplicationIcon>
+    <AssemblyTitle>ThemeSwitch</AssemblyTitle>
+    <Description>Switches Windows 11 between light and dark with the sun and the weather.</Description>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\ThemeSwitch.Core\ThemeSwitch.Core.csproj" />
+  </ItemGroup>
+
+</Project>
