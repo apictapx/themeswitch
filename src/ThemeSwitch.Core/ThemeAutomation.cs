@@ -19,7 +19,7 @@ public sealed record AutomationStatus(
 }
 
 /// <summary>
-/// Applies decisions to the store and handles manual overrides: a choice made by hand (tray click or
+/// Applies decisions to the store and handles manual overrides: a choice made by hand (tray menu or
 /// Windows Settings) holds until the automatic theme would next change, then automation resumes.
 /// In a fixed mode (Always Light/Dark) the same manual change flips the mode instead.
 /// </summary>
@@ -69,7 +69,7 @@ public sealed class ThemeAutomation(AppSettings settings, IThemeStore store)
         return Status(nowUtc, location, weather, engine, decision, current, applied);
     }
 
-    /// <summary>The tray click. In Auto it's a temporary override; in a fixed mode it flips the mode.</summary>
+    /// <summary>Switch to Dark/Light in the tray menu. In Auto it's a temporary override; in a fixed mode it flips the mode.</summary>
     public AutomationStatus Toggle(DateTime nowUtc, GeoPoint? location, WeatherForecast? weather)
     {
         var target = store.Read() == ThemeChoice.Dark ? ThemeChoice.Light : ThemeChoice.Dark;

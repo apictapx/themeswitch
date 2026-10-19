@@ -11,6 +11,7 @@ src/ThemeSwitch.Core     net10.0          no Windows APIs — all the rules, ful
   ThemeAutomation.cs     applies decisions through IThemeStore; manual overrides
   Settings.cs            AppSettings + SettingsStore (settings.json)
   StatusText.cs          the tooltip line
+  Brightness.cs          LightLevel (luma + exposure → log2 light), BrightnessCurve (fit), BrightnessAutomation
 
 src/ThemeSwitch          net10.0-windows  WinForms tray app + CLI
   Program.cs             argument parsing, single-instance mutex, tray vs one-shot command
@@ -21,6 +22,8 @@ src/ThemeSwitch          net10.0-windows  WinForms tray app + CLI
   Cli.cs                 --report / --apply-once / --toggle (JSON output)
   Autostart.cs           HKCU\…\Run entry
   TrayIcons.cs           sun/moon drawn at the tray's pixel size
+  LightMeter.cs          CameraLightMeter: Media Foundation capture with locked exposure; FixedLightMeter (tests)
+  Displays.cs            DdcDisplays: brightness/contrast over DDC/CI (dxva2); FileDisplay (tests)
 ```
 
 ## The decision
@@ -61,12 +64,12 @@ with UTC hour boundaries and DST never has to be reasoned about.
 2. If the registry differs from `LastApplied`, someone changed it outside the app → start an override.
 3. Unless an override is active, write the decided theme if it differs.
 
-An override (tray click, `--toggle`, or the above) lasts until `NextChangeUtc` — the next time the
+An override (the menu's Switch to Dark/Light, `--toggle`, or the above) lasts until `NextChangeUtc` — the next time the
 *automatic* answer flips — after which automation simply resumes. Choosing the theme automation wants
 anyway cancels any override.
 
 In *Always Light/Dark* mode the chosen theme is enforced (also at startup, in case it was changed while
-the app wasn't running). A tray click — or a change in Windows Settings — flips the mode instead.
+the app wasn't running). Switch to Dark/Light — or a change in Windows Settings — flips the mode instead.
 
 ## Location
 
@@ -99,6 +102,52 @@ Windows keeps the theme in `HKCU\Software\Microsoft\Windows\CurrentVersion\Theme
 only if `switchSystemTheme`), then broadcasts `WM_SETTINGCHANGE("ImmersiveColorSet")` so classic Win32
 apps repaint. The broadcast waits for every top-level window (~0.6 s), so the tray runs it on a
 background thread. Any other key path (tests) is written but never broadcast.
+
+## Auto brightness
+
+**Measuring.** A webcam in auto exposure makes every room look mid-grey, so `CameraLightMeter` opens the
+camera through Media Foundation, takes `IAMCameraControl`/`IAMVideoProcAmp` from the same media source,
+pins gain (64) and turns off backlight compensation, then steps a manual exposure from 2^-7 s until the
+top half of the frame averages 60–200 luma (never longer than 2^-6 s: at 30 fps a longer exposure
+stops adding light). `LightLevel.FromLuma` turns that into a log2 level: video-range black (16) is
+subtracted, a gamma of 1.6 undoes the camera's tone curve, and the exposure is divided out. The level
+is camera-specific; learning absorbs that. Exposure, gain and backlight are restored in a `finally`.
+Exposure only sticks within one capture session, which is why this is all in-process rather than
+`ffmpeg`/DirectShow. Windows records camera use per app in
+`HKCU\…\CapabilityAccessManager\ConsentStore\webcam`; an entry with a start but no stop time means
+another app has the camera, and the run is skipped. The first activation after the Frame Server service
+has been idle can fail, so it is retried once after 2 s.
+
+**Deciding.** `BrightnessCurve` is a line in (level, percent): with no learned points the default one
+(level 3.2 → 50 %, 7.2 % per step); with one point the default slope through it; with points at least one
+level apart a least-squares fit, slope kept within 2–30. `BrightnessAutomation.Tick` smooths the level
+(half-way each run; a jump of 1.5+ levels — lights switched — is taken at once; a gap of three intervals
+starts over), then:
+
+1. If the monitor reads something other than `BrightnessLastSet` (±1), someone changed it: the value is
+   learned as a point (replacing points within 0.5 level, eight at most) and nothing is written.
+   Switching auto brightness on clears `BrightnessLastSet`, so the value at that moment is learned
+   instead of jumping.
+2. Otherwise the curve's value is snapped to the `BrightnessStep` grid (multiples of 5), and brightness
+   moves only when that differs from the last decision (`BrightnessLastTarget`) *and* the unsnapped value
+   is more than half a step + 1 % away from it — so a level hovering on a rounding boundary doesn't
+   flip 60 ↔ 65 every run. Comparing with the last *target* rather than the monitor is
+   what keeps a manual value — even one outside the range — until the room changes.
+
+**Adjust now.** A left click on the tray icon (`--brightness-now`) calls `AdjustNow`: the raw level,
+no smoothing, no hysteresis (still on the grid), and a value set by hand is overwritten rather than learned —
+"match the room" is the point of clicking. It works whether auto brightness is on or off.
+
+**Applying.** `DdcDisplays` writes VCP 0x10 (brightness) and 0x12 (contrast) to every monitor that
+answers, 150 ms apart, reading each back and retrying: a Dell P2423D silently drops a command that
+arrives too soon after the previous one. A fade writes every grid value on the way (50→80 is six writes, 80→70 two; from a hand-set 54 the
+first write is 55). If a write isn't confirmed, the
+monitor is read back and that value remembered, so the next run neither learns a half-finished fade as a
+manual change nor gives up on the target. The tray and a one-shot `--brightness-once` keep separate copies
+of the settings (as for the theme, the tray's state wins); a CLI write therefore looks like a manual change
+to the tray, which learns the value the curve chose anyway. The screen's
+own light barely moves the reading (≈0.17 levels between 20 % and 80 % in a dark room), so there's no
+feedback loop to damp.
 
 ## Files
 

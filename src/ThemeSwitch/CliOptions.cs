@@ -4,7 +4,7 @@ using System.Text;
 
 namespace ThemeSwitch;
 
-enum Command { Tray, Report, ApplyOnce, Toggle, Help, Version }
+enum Command { Tray, Report, ApplyOnce, Toggle, LightReport, BrightnessOnce, BrightnessNow, Help, Version }
 
 sealed record CliOptions
 {
@@ -16,6 +16,8 @@ sealed record CliOptions
     public string? TimeZoneId { get; init; }
     public bool NoAutostart { get; init; }
     public bool ForceRefresh { get; init; }
+    public double? Light { get; init; }
+    public string? MonitorFile { get; init; }
 
     public const string Usage = """
         ThemeSwitch - switches Windows light/dark with the sun and the weather.
@@ -26,7 +28,10 @@ sealed record CliOptions
           --tray          Run in the notification area (default).
           --report        Print location, sun times and today's hourly plan as JSON.
           --apply-once    Apply the automatic decision once, print the status, exit.
-          --toggle        Flip the theme like a tray click, print the status, exit.
+          --toggle        Flip the theme like the tray menu's Switch to Dark/Light, print the status, exit.
+          --light-report  Measure room light with the webcam, show monitors and the brightness it would set.
+          --brightness-once  Run one auto-brightness step (measure, then adjust or learn), even if it's off.
+          --brightness-now   Set brightness for the room right now, like a tray click (overrides a manual setting).
           --version       Print the version.
           --help          Show this help.
 
@@ -38,6 +43,8 @@ sealed record CliOptions
           --tz <zone-id>       Use this time zone instead of the PC's, e.g. Europe/Lisbon.
           --refresh            Re-check location and weather even if the cache is fresh.
           --no-autostart       Never touch the "Start with Windows" entry.
+          --light <level>      Pretend the room light is this level instead of using the camera.
+          --monitor-file <f>   Pretend this file ("brightness contrast") is the monitor.
         """;
 
     /// <summary>One instance per data folder, so a test instance can run beside the real one.</summary>
@@ -65,6 +72,9 @@ sealed record CliOptions
                 "--report" => o with { Command = Command.Report },
                 "--apply-once" => o with { Command = Command.ApplyOnce },
                 "--toggle" => o with { Command = Command.Toggle },
+                "--light-report" => o with { Command = Command.LightReport },
+                "--brightness-once" => o with { Command = Command.BrightnessOnce },
+                "--brightness-now" => o with { Command = Command.BrightnessNow },
                 "--help" or "-h" or "/?" => o with { Command = Command.Help },
                 "--version" => o with { Command = Command.Version },
                 "--data-dir" => o with { DataDir = Path.GetFullPath(Value()) },
@@ -74,11 +84,18 @@ sealed record CliOptions
                 "--tz" => o with { TimeZoneId = Value() },
                 "--refresh" => o with { ForceRefresh = true },
                 "--no-autostart" => o with { NoAutostart = true },
+                "--light" => o with { Light = ParseLevel(Value()) },
+                "--monitor-file" => o with { MonitorFile = Path.GetFullPath(Value()) },
                 _ => throw new ArgumentException($"unknown argument: {arg}"),
             };
         }
         return o;
     }
+
+    static double ParseLevel(string text) =>
+        double.TryParse(text, NumberStyles.Float, CultureInfo.InvariantCulture, out double value)
+            ? value
+            : throw new ArgumentException($"--light: not a number: {text}");
 
     static DateTime ParseInstant(string text) =>
         DateTimeOffset.TryParse(text, CultureInfo.InvariantCulture, DateTimeStyles.AssumeUniversal, out var value)

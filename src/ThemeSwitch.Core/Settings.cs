@@ -27,8 +27,33 @@ public sealed class AppSettings
     /// <summary>Autostart is turned on once on first run; after that the user's menu choice sticks.</summary>
     public bool AutostartConfigured { get; set; }
 
+    /// <summary>Measure room light with the webcam and set monitor brightness (DDC/CI) to match. Opt-in.</summary>
+    public bool AutoBrightness { get; set; }
+    public int BrightnessIntervalMinutes { get; set; } = 5;
+    public int BrightnessMin { get; set; } = 50;
+    public int BrightnessMax { get; set; } = 80;
+    /// <summary>Brightness is always a multiple of this (50, 55 … 80) and fades one step at a time.</summary>
+    public int BrightnessStep { get; set; } = 5;
+    /// <summary>Percent per light step (a doubling of room light) until the user's own adjustments say otherwise.</summary>
+    public double BrightnessSlope { get; set; } = BrightnessCurve.DefaultSlope;
+    /// <summary>Set contrast to the same value as brightness.</summary>
+    public bool BrightnessIncludesContrast { get; set; } = true;
+    /// <summary>Only monitors whose name contains this; empty = every monitor that answers DDC/CI.</summary>
+    public string BrightnessMonitor { get; set; } = "";
+    /// <summary>Camera whose name contains this; empty = the first one.</summary>
+    public string BrightnessCamera { get; set; } = "";
+
+    /// <summary>Manual adjustments, learned as "at this light level I want this much".</summary>
+    public List<BrightnessPoint> BrightnessPoints { get; set; } = [];
+    /// <summary>What the monitor should read if nobody touched it; anything else is a manual change.</summary>
+    public int? BrightnessLastSet { get; set; }
+    /// <summary>The curve's answer (on the step grid) at the last decision; brightness moves only when this moves.</summary>
+    public int? BrightnessLastTarget { get; set; }
+
     public EngineOptions ToEngineOptions() =>
         new(SunriseOffsetMinutes, SunsetOffsetMinutes, CloudCoverThreshold, GloomHoldMinutes);
+
+    public BrightnessCurve ToBrightnessCurve() => BrightnessCurve.Fit(BrightnessPoints, BrightnessSlope);
 }
 
 public sealed class SettingsStore(string path)

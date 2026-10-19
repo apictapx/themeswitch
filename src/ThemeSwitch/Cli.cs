@@ -13,6 +13,7 @@ static class Cli
     {
         using var host = new AppHost(options, broadcastInBackground: false);
         var now = host.UtcNow();
+        if (options.Command is Command.LightReport or Command.BrightnessOnce or Command.BrightnessNow) return await BrightnessAsync(host, options.Command, now);
         if (options.ForceRefresh || host.NeedsRefresh(now))
             await host.RefreshAsync(now, options.ForceRefresh, CancellationToken.None);
 
@@ -26,6 +27,56 @@ static class Cli
         host.Save();
         Console.Out.WriteLine(JsonSerializer.Serialize(output, OutputJson));
         return 0;
+    }
+
+    /// <summary>--light-report changes nothing; --brightness-once runs one automatic step; --brightness-now is the tray click.</summary>
+    static async Task<int> BrightnessAsync(AppHost host, Command command, DateTime now)
+    {
+        object output;
+        int exit = 0;
+        if (command is Command.BrightnessOnce or Command.BrightnessNow)
+        {
+            var r = await host.AdjustBrightnessAsync(now, immediate: command == Command.BrightnessNow);
+            host.Save();
+            exit = r.Status is null ? 1 : 0;
+            output = new
+            {
+                action = r.Status?.Action,
+                lightLevel = r.Status?.Level,
+                from = r.Status?.Current,
+                to = r.Status?.Target,
+                note = r.Note,
+            };
+        }
+        else
+        {
+            try
+            {
+                var (reading, current) = await host.MeasureBrightnessAsync();
+                var curve = host.Settings.ToBrightnessCurve();
+                output = new
+                {
+                    camera = reading.Source,
+                    lightLevel = Math.Round(reading.Level, 2),
+                    luma = reading.Luma is { } l ? Math.Round(l, 1) : (double?)null,
+                    exposure = reading.Exposure,
+                    monitors = host.Display.Names(),
+                    brightness = current,
+                    target = host.Brightness.Target(reading.Level),
+                    autoBrightness = host.Settings.AutoBrightness,
+                    includesContrast = host.Settings.BrightnessIncludesContrast,
+                    range = new[] { host.Settings.BrightnessMin, host.Settings.BrightnessMax },
+                    curve = new { slope = Math.Round(curve.Slope, 2), intercept = Math.Round(curve.Intercept, 1), points = host.Settings.BrightnessPoints },
+                };
+            }
+            catch (LightMeterException ex)
+            {
+                exit = 1;
+                output = new { error = ex.Message, monitors = host.Display.Names(), brightness = host.Display.Read() };
+            }
+        }
+        Console.Out.WriteLine(JsonSerializer.Serialize(output, OutputJson));
+        return exit;
     }
 
     // Plain "+01:00" and "·" for humans reading the output; it's never embedded in HTML.

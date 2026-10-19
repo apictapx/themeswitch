@@ -51,7 +51,11 @@ if ($Install) {
     $running | Stop-Process -Force
     $running | Wait-Process -Timeout 15 -ErrorAction SilentlyContinue
     New-Item -ItemType Directory -Force $target | Out-Null
-    Copy-Item "$out/ThemeSwitch.exe" $target -Force
+    # The exe can stay locked for a moment after the process exits (antivirus scans, the loader).
+    for ($attempt = 1; ; $attempt++) {
+        try { Copy-Item "$out/ThemeSwitch.exe" $target -Force -ErrorAction Stop; break }
+        catch { if ($attempt -ge 10) { throw }; Start-Sleep -Seconds 1 }
+    }
     Start-Process (Join-Path $target "ThemeSwitch.exe") -ArgumentList "--tray"
     Write-Host "installed and started $target\ThemeSwitch.exe"
 }

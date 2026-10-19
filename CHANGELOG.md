@@ -6,6 +6,22 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and 
 
 ## [Unreleased]
 
+### Added
+
+- Auto brightness (opt-in, tray menu): every 5 minutes the webcam measures room light and external
+  monitors' brightness and contrast follow it over DDC/CI, fading in 5 % steps, within 50–80 %.
+- Learns from manual adjustments on the monitor: each becomes a point on the light → brightness curve,
+  and is kept until the room light changes.
+- Skips measuring while another app uses the camera, while the PC is locked, and for monitors without
+  DDC/CI; camera exposure, gain and backlight compensation are restored after every measurement.
+- Command line: `--light-report`, `--brightness-once`, `--brightness-now`, and `--light` /
+  `--monitor-file` for testing.
+
+### Changed
+
+- Left-clicking the tray icon now sets monitor brightness for the room right now (also with auto
+  brightness off, and over a value set by hand). The theme toggle is **Switch to Dark/Light** in the menu.
+
 ## [0.1.0] - 2026-10-17
 
 First release.

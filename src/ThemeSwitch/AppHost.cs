@@ -34,6 +34,9 @@ sealed class AppHost : IDisposable
     public RegistryThemeStore Store { get; }
     public TimeZoneInfo Zone { get; private set; }
     public ThemeAutomation Automation { get; }
+    public BrightnessAutomation Brightness { get; }
+    public ILightMeter Meter { get; }
+    public IBrightnessDisplay Display { get; }
     public WeatherForecast? Weather { get; private set; }
     public LocationChoice? LastLocationChoice { get; private set; }
     public Log Log { get; }
@@ -56,6 +59,9 @@ sealed class AppHost : IDisposable
         Store = new RegistryThemeStore(options.ThemeKey ?? RegistryThemeStore.WindowsKey, Settings, broadcastInBackground);
         _source = options.FixturesDir is { } dir ? new FixtureDataSource(dir) : new HttpDataSource();
         Automation = new ThemeAutomation(Settings, Store);
+        Brightness = new BrightnessAutomation(Settings);
+        Meter = options.Light is { } level ? new FixedLightMeter(level) : new CameraLightMeter(Settings.BrightnessCamera);
+        Display = options.MonitorFile is { } file ? new FileDisplay(file) : new DdcDisplays(Settings.BrightnessMonitor);
         Weather = LoadWeatherCache();
     }
 
@@ -146,6 +152,86 @@ sealed class AppHost : IDisposable
         return failed;
     }
 
+    /// <summary>Room light and the monitor's current brightness. Slow (camera, DDC/CI): runs on a worker thread.</summary>
+    /// <exception cref="LightMeterException">The camera couldn't be used.</exception>
+    public Task<(LightReading Reading, int? Current)> MeasureBrightnessAsync() =>
+        Task.Run(() => (Meter.Measure(), Display.Read()));
+
+    /// <summary>
+    /// Measures, decides, and fades the monitors when the decision says so. The decision runs on the
+    /// caller's thread (the tray's UI thread owns Settings); camera and monitor I/O run on a worker.
+    /// Never throws for camera or monitor trouble: it's logged and the next run tries again.
+    /// </summary>
+    /// <param name="immediate">Adjust right away to the measured light, over a manual setting (tray click), instead of the scheduled step.</param>
+    /// <param name="stillWanted">Asked after measuring; false (auto brightness switched off meanwhile) drops the result.</param>
+    public async Task<BrightnessResult> AdjustBrightnessAsync(DateTime nowUtc, bool immediate = false, Func<bool>? stillWanted = null)
+    {
+        LightReading reading;
+        int? current;
+        try
+        {
+            (reading, current) = await MeasureBrightnessAsync();
+        }
+        catch (Exception ex) // camera or DDC trouble of any kind: skip this run, try again next time
+        {
+            string why = ex is LightMeterException ? ex.Message : $"{ex.GetType().Name}: {ex.Message}";
+            Log.Write($"brightness: skipped, {why}");
+            return new(null, null, $"skipped: {why}");
+        }
+        if (stillWanted?.Invoke() == false) return new(reading, null, "cancelled");
+
+        int? lastTarget = Settings.BrightnessLastTarget;
+        var status = immediate ? Brightness.AdjustNow(nowUtc, reading.Level, current) : Brightness.Tick(nowUtc, reading.Level, current);
+        string note = Describe(reading, status);
+        if (status.Write is { } target && current is { } from)
+        {
+            bool contrast = Settings.BrightnessIncludesContrast;
+            var (ok, monitorNow) = await Task.Run(() => Fade(from, target, contrast));
+            if (!ok)
+            {
+                Brightness.WriteFailed(monitorNow, lastTarget);
+                note += ", write failed";
+            }
+        }
+        if (status.Action != BrightnessAction.None || immediate) Log.Write($"brightness{(immediate ? " (now)" : "")}: {note}");
+        return new(reading, status, note);
+    }
+
+    (bool Ok, int? MonitorNow) Fade(int from, int target, bool contrast)
+    {
+        try
+        {
+            if (BrightnessAutomation.FadeSteps(from, target, Settings.BrightnessStep).All(step => Display.Write(step, contrast))) return (true, target);
+        }
+        catch (Exception ex)
+        {
+            Log.Write($"brightness: write failed: {ex.GetType().Name}: {ex.Message}");
+        }
+        try
+        {
+            return (false, Display.Read());
+        }
+        catch (Exception)
+        {
+            return (false, null);
+        }
+    }
+
+    static string Describe(LightReading r, BrightnessStatus s)
+    {
+        string light = r.Luma is { } luma
+            ? FormattableString.Invariant($"light {s.Level:0.00} ({(Math.Abs(s.Level - r.Level) >= 0.005 ? $"smoothed, now {r.Level:0.00}, " : "")}luma {luma:0} at 2^{r.Exposure})")
+            : FormattableString.Invariant($"light {s.Level:0.00}");
+        string monitor = s.Action switch
+        {
+            BrightnessAction.Apply => $"{s.Current}% -> {s.Target}%",
+            BrightnessAction.Learned => FormattableString.Invariant($"learned {s.Current}% (curve {s.Curve.Slope:0.0}%/step)"),
+            BrightnessAction.MonitorUnavailable => "no monitor answers DDC/CI",
+            _ => $"{s.Current}%, target {s.Target}%",
+        };
+        return $"{light} · {monitor}";
+    }
+
     bool LocationStale(DateTime nowUtc) =>
         Settings.LocationCheckedUtc is not { } checkedAt || nowUtc - checkedAt >= LocationMaxAge || nowUtc < checkedAt;
 
@@ -213,3 +299,5 @@ sealed class Log(string path)
         }
     }
 }
+
+sealed record BrightnessResult(LightReading? Reading, BrightnessStatus? Status, string Note);

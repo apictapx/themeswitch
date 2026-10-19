@@ -27,7 +27,7 @@ static class Program
                 ConsoleAttach.EnsureOutput();
                 Console.Out.WriteLine(AppInfo.Version);
                 return 0;
-            case Command.Report or Command.ApplyOnce or Command.Toggle:
+            case Command.Report or Command.ApplyOnce or Command.Toggle or Command.LightReport or Command.BrightnessOnce or Command.BrightnessNow:
                 ConsoleAttach.EnsureOutput();
                 // Redirected output would otherwise use the OEM code page and mangle "·".
                 Console.OutputEncoding = new System.Text.UTF8Encoding(encoderShouldEmitUTF8Identifier: false);

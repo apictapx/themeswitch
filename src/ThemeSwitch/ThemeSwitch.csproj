@@ -4,6 +4,8 @@
     <OutputType>WinExe</OutputType>
     <TargetFramework>net10.0-windows</TargetFramework>
     <UseWindowsForms>true</UseWindowsForms>
+    <!-- Media Foundation is called through COM vtables (LightMeter.cs). -->
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
     <AssemblyName>ThemeSwitch</AssemblyName>
     <RootNamespace>ThemeSwitch</RootNamespace>
     <ApplicationIcon>app.ico</ApplicationIcon>
