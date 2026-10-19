@@ -6,6 +6,8 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and 
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-10-19
+
 ### Added
 
 - Auto brightness (opt-in, tray menu): every 5 minutes the webcam measures room light and external
@@ -42,5 +44,6 @@ First release.
 - Re-checks immediately after waking from sleep or a clock change, and notices time zone changes
   (e.g. after travel) without a restart.
 
-[Unreleased]: https://github.com/apictapx/themeswitch/compare/v0.1.0...HEAD
+[Unreleased]: https://github.com/apictapx/themeswitch/compare/v0.2.0...HEAD
+[0.2.0]: https://github.com/apictapx/themeswitch/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/apictapx/themeswitch/releases/tag/v0.1.0
