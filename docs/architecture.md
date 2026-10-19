@@ -11,7 +11,9 @@ src/ThemeSwitch.Core     net10.0          no Windows APIs — all the rules, ful
   ThemeAutomation.cs     applies decisions through IThemeStore; manual overrides
   Settings.cs            AppSettings + SettingsStore (settings.json)
   StatusText.cs          the tooltip line
-  Brightness.cs          LightLevel (luma + exposure → log2 light), BrightnessCurve (fit), BrightnessAutomation
+  Brightness.cs          BrightnessCurve (fit), BrightnessAutomation (smoothing, grid, learning, adjust-now)
+  Hardware.cs            profiles (CameraProfile, DisplayProfile), channel interfaces (ICameraSession,
+                         IMonitorChannel), LightMeasurement + LightLevel, DisplayController
 
 src/ThemeSwitch          net10.0-windows  WinForms tray app + CLI
   Program.cs             argument parsing, single-instance mutex, tray vs one-shot command
@@ -22,8 +24,8 @@ src/ThemeSwitch          net10.0-windows  WinForms tray app + CLI
   Cli.cs                 --report / --apply-once / --toggle (JSON output)
   Autostart.cs           HKCU\…\Run entry
   TrayIcons.cs           sun/moon drawn at the tray's pixel size
-  LightMeter.cs          CameraLightMeter: Media Foundation capture with locked exposure; FixedLightMeter (tests)
-  Displays.cs            DdcDisplays: brightness/contrast over DDC/CI (dxva2); FileDisplay (tests)
+  LightMeter.cs          MediaFoundationCamera (ICameraSession for any UVC webcam), CameraLightMeter; FixedLightMeter (tests)
+  Displays.cs            Dxva2DdcChannel (IMonitorChannel over DDC/CI), DdcDisplays; FileDisplay (tests)
 ```
 
 ## The decision
@@ -102,6 +104,24 @@ Windows keeps the theme in `HKCU\Software\Microsoft\Windows\CurrentVersion\Theme
 only if `switchSystemTheme`), then broadcasts `WM_SETTINGCHANGE("ImmersiveColorSet")` so classic Win32
 apps repaint. The broadcast waits for every top-level window (~0.6 s), so the tray runs it on a
 background thread. Any other key path (tests) is written but never broadcast.
+
+## Hardware: channels and profiles
+
+Hardware is split in two so another vendor is cheap to add:
+
+- A **channel** is *how* the app talks to a kind of device — C# in the Windows project:
+  `MediaFoundationCamera : ICameraSession` (any UVC webcam: exposure/gain/backlight, frames' luma, snapshot
+  and restore of settings) and `Dxva2DdcChannel : IMonitorChannel` (read/write a VCP code). A device that
+  speaks something else — a laptop panel (WMI brightness), a network TV — needs a new channel.
+- A **profile** is *what's different* about one vendor's device within that channel — plain data in Core:
+  `CameraProfile` (start/longest exposure, gain as a fraction of its range, black/white level, tone-curve
+  gamma, luma window, frame region, settle frames) and `DisplayProfile` (VCP codes, gap between commands,
+  verify and retry, contrast range). `Generic` holds the defaults; built-in profiles (Brio 500, Dell P2423D)
+  are matched by device name. They're records with init properties so they can later come from JSON.
+- The **algorithms** that use them are in Core and don't know the hardware: `LightMeasurement` (pin gain,
+  exposure ladder, always restore) and `DisplayController` (percent ↔ monitor units, gap, verify, contrast
+  mapping). `HardwareTests` run them against fakes that behave like awkward hardware — a camera with another
+  range or no gain control, a monitor that drops commands sent too soon.
 
 ## Auto brightness
 

@@ -5,11 +5,13 @@ namespace ThemeSwitch.Core.Tests;
 
 public class LightLevelTests
 {
+    static readonly CameraProfile Brio = CameraProfile.Brio500;
+
     [Fact]
     public void AdjacentExposuresOfTheSameSceneAgree()
     {
         // Brio 500, gain 64, one evening room: the same light seen at three exposures.
-        double a = LightLevel.FromLuma(61, -8), b = LightLevel.FromLuma(93, -7), c = LightLevel.FromLuma(130, -6);
+        double a = LightLevel.FromLuma(61, -8, Brio), b = LightLevel.FromLuma(93, -7, Brio), c = LightLevel.FromLuma(130, -6, Brio);
 
         Assert.InRange(Math.Max(a, Math.Max(b, c)) - Math.Min(a, Math.Min(b, c)), 0, 0.5);
     }
@@ -17,15 +19,15 @@ public class LightLevelTests
     [Fact]
     public void BrighterFrameOrShorterExposureMeansMoreLight()
     {
-        Assert.True(LightLevel.FromLuma(120, -7) > LightLevel.FromLuma(80, -7));
-        Assert.Equal(LightLevel.FromLuma(100, -7) + 1, LightLevel.FromLuma(100, -8), 6);
+        Assert.True(LightLevel.FromLuma(120, -7, Brio) > LightLevel.FromLuma(80, -7, Brio));
+        Assert.Equal(LightLevel.FromLuma(100, -7, Brio) + 1, LightLevel.FromLuma(100, -8, Brio), 6);
     }
 
     [Fact]
     public void BlackFramesDoNotProduceInfinity()
     {
-        Assert.True(double.IsFinite(LightLevel.FromLuma(0, -6)));
-        Assert.True(double.IsFinite(LightLevel.FromLuma(255, -11)));
+        Assert.True(double.IsFinite(LightLevel.FromLuma(0, -6, Brio)));
+        Assert.True(double.IsFinite(LightLevel.FromLuma(255, -11, Brio)));
     }
 
     [Theory]
@@ -36,7 +38,7 @@ public class LightLevelTests
     [InlineData(-7, 120, null)] // in range
     public void ExposureLadder(int exposure, double luma, int? expected)
     {
-        Assert.Equal(expected, LightLevel.NextExposure(exposure, luma, shortest: -11, longest: -2));
+        Assert.Equal(expected, LightLevel.NextExposure(exposure, luma, shortest: -11, longest: -2, Brio));
     }
 }
 

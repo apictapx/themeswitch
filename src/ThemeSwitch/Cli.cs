@@ -69,10 +69,10 @@ static class Cli
                     curve = new { slope = Math.Round(curve.Slope, 2), intercept = Math.Round(curve.Intercept, 1), points = host.Settings.BrightnessPoints },
                 };
             }
-            catch (LightMeterException ex)
+            catch (Exception ex) // camera or monitor trouble of any kind: report it, don't crash
             {
                 exit = 1;
-                output = new { error = ex.Message, monitors = host.Display.Names(), brightness = host.Display.Read() };
+                output = new { error = ex is LightMeterException ? ex.Message : $"{ex.GetType().Name}: {ex.Message}", monitors = host.Display.Names(), brightness = host.Display.Read() };
             }
         }
         Console.Out.WriteLine(JsonSerializer.Serialize(output, OutputJson));

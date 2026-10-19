@@ -23,93 +23,181 @@ sealed class FixedLightMeter(double level) : ILightMeter
 }
 
 /// <summary>
-/// Measures room light with a webcam through Media Foundation. The camera's auto exposure would make
-/// every room look the same, so for the second or so of the measurement it pins gain, turns off
-/// backlight compensation and steps a manual exposure until the frame is well exposed — then puts
-/// everything back. Only the top half of the frame (wall, ceiling) is averaged: the face below is lit
-/// by the screen. Frames never leave memory.
+/// Measures room light with a webcam: opens it through Media Foundation, picks the camera's profile and
+/// runs <see cref="LightMeasurement"/>, which locks exposure for a second and then puts everything back.
+/// Frames never leave memory.
 /// </summary>
-sealed unsafe class CameraLightMeter(string nameFilter) : ILightMeter
+sealed class CameraLightMeter(string nameFilter) : ILightMeter
 {
-    const int PinnedGain = 64;
-    const int SettleFrames = 6;
-    const int MaxSteps = 6;
-
     public LightReading Measure()
     {
         if (CameraInUse() is { } user) throw new LightMeterException($"camera in use by {user}");
-
-        Check(MFStartup(MfVersion, 0), "MFStartup");
+        using var camera = MediaFoundationCamera.Open(nameFilter);
+        LightSample sample;
         try
         {
-            var (source, name) = OpenCamera();
-            try
+            sample = LightMeasurement.Measure(camera, CameraProfile.For(camera.Name));
+        }
+        catch (NotSupportedException ex)
+        {
+            throw new LightMeterException(ex.Message);
+        }
+        return new(sample.Level, camera.Name, sample.Luma, sample.Exposure);
+    }
+
+    /// <summary>
+    /// Another app holding the camera (a video call) would see its picture jump while exposure is locked,
+    /// so skip. Windows records each app's camera use; a start time without a stop time means "now".
+    /// </summary>
+    static string? CameraInUse()
+    {
+        const string root = @"Software\Microsoft\Windows\CurrentVersion\CapabilityAccessManager\ConsentStore\webcam";
+        foreach (string path in new[] { root, root + @"\NonPackaged" })
+        {
+            using var key = Registry.CurrentUser.OpenSubKey(path);
+            if (key is null) continue;
+            foreach (string app in key.GetSubKeyNames())
             {
-                return MeasureWith(source, name);
+                using var entry = key.OpenSubKey(app);
+                if (entry?.GetValue("LastUsedTimeStart") is long start && start > 0 && entry.GetValue("LastUsedTimeStop") is 0L)
+                    return Path.GetFileName(app.Replace('#', '\\'));
             }
-            finally
+        }
+        return null;
+    }
+}
+
+/// <summary>
+/// The Media Foundation channel: any UVC webcam. Exposure, gain and backlight compensation come from
+/// IAMCameraControl / IAMVideoProcAmp on the same media source the frames are read from — exposure set
+/// from another process or session doesn't stick.
+/// </summary>
+sealed unsafe class MediaFoundationCamera : ICameraSession
+{
+    readonly IntPtr _source, _reader, _camera, _amp;
+    readonly int _width, _height;
+    readonly bool _yuy2;
+    readonly CameraSettings _initial;
+
+    public string Name { get; }
+    public (int Min, int Max) ExposureRange { get; }
+    public (int Min, int Max)? GainRange { get; }
+
+    MediaFoundationCamera(IntPtr source, string name)
+    {
+        _source = source;
+        Name = name;
+        var cameraIid = IidCameraControl;
+        var ampIid = IidVideoProcAmp;
+        try
+        {
+            Check(Marshal.QueryInterface(source, in cameraIid, out _camera), "exposure control");
+            if (Marshal.QueryInterface(source, in ampIid, out _amp) < 0) _amp = IntPtr.Zero;
+            ExposureRange = GetRange(_camera, CameraExposure) ?? throw new LightMeterException("camera has no exposure range");
+            GainRange = _amp != IntPtr.Zero ? GetRange(_amp, AmpGain) : null;
+            // Before the reader and format: some drivers retune exposure and gain when the format changes.
+            _initial = new(
+                Get(_camera, CameraExposure),
+                _amp != IntPtr.Zero ? Get(_amp, AmpGain) : null,
+                _amp != IntPtr.Zero ? Get(_amp, AmpBacklight) : null);
+            Check(MFCreateSourceReaderFromMediaSource(source, IntPtr.Zero, out _reader), "source reader");
+            (_width, _height, _yuy2) = ChooseSmallFormat(_reader);
+        }
+        catch
+        {
+            // Open() shuts the source down; release what this constructor took.
+            foreach (var p in new[] { _reader, _amp, _camera }) if (p != IntPtr.Zero) Marshal.Release(p);
+            throw;
+        }
+    }
+
+    /// <exception cref="LightMeterException">No matching camera, or it can't be opened.</exception>
+    public static MediaFoundationCamera Open(string nameFilter)
+    {
+        Check(MFStartup(MfVersion, 0), "MFStartup");
+        IntPtr source = IntPtr.Zero;
+        try
+        {
+            (source, string name) = Activate(nameFilter);
+            return new MediaFoundationCamera(source, name);
+        }
+        catch
+        {
+            if (source != IntPtr.Zero)
             {
                 Call(source, Slot.MediaSourceShutdown);
                 Marshal.Release(source);
             }
-        }
-        finally
-        {
             MFShutdown();
+            throw;
         }
     }
 
-    LightReading MeasureWith(IntPtr source, string name)
+    public CameraSettings Snapshot() => _initial;
+
+    // A setting that couldn't be read is left to the camera (auto), the safe default for other apps.
+    public void Restore(CameraSettings settings)
     {
-        var cameraIid = IidCameraControl;
-        var ampIid = IidVideoProcAmp;
-        Check(Marshal.QueryInterface(source, in cameraIid, out IntPtr camera), "exposure control");
-        bool hasAmp = Marshal.QueryInterface(source, in ampIid, out IntPtr amp) >= 0;
-        GetRange(camera, CameraExposure, out int shortest, out int longest);
-        // Value and auto/manual flag as they were, so other apps find the camera unchanged.
-        var exposureBefore = Get(camera, CameraExposure);
-        var gainBefore = hasAmp ? Get(amp, AmpGain) : null;
-        var backlightBefore = hasAmp ? Get(amp, AmpBacklight) : null;
+        SetProp(_camera, CameraExposure, settings.Exposure);
+        if (_amp == IntPtr.Zero) return;
+        SetProp(_amp, AmpGain, settings.Gain);
+        SetProp(_amp, AmpBacklight, settings.BacklightCompensation);
+    }
 
-        Check(MFCreateSourceReaderFromMediaSource(source, IntPtr.Zero, out IntPtr reader), "source reader");
-        try
-        {
-            var (width, height, yuy2) = ChooseSmallFormat(reader);
-            if (hasAmp)
-            {
-                SetProp(amp, AmpGain, PinnedGain, Manual);
-                SetProp(amp, AmpBacklight, 0, Manual);
-            }
+    public void SetExposure(int value) => SetProp(_camera, CameraExposure, ControlValue.Manual(value));
 
-            int exposure = LightLevel.StartExposure, measuredAt = exposure;
-            double luma = 0;
-            Grab(reader, width, height, yuy2, SettleFrames); // let the stream start
-            for (int step = 0; step < MaxSteps; step++)
-            {
-                SetProp(camera, CameraExposure, exposure, Manual);
-                luma = Grab(reader, width, height, yuy2, SettleFrames);
-                measuredAt = exposure;
-                if (LightLevel.NextExposure(exposure, luma, shortest, longest) is not { } next) break;
-                exposure = next;
-            }
-            return new(LightLevel.FromLuma(luma, measuredAt), name, luma, measuredAt);
-        }
-        finally
+    public void SetGain(int value)
+    {
+        if (_amp != IntPtr.Zero) SetProp(_amp, AmpGain, ControlValue.Manual(value));
+    }
+
+    public void SetBacklightCompensation(bool on)
+    {
+        if (_amp != IntPtr.Zero) SetProp(_amp, AmpBacklight, ControlValue.Manual(on ? 1 : 0));
+    }
+
+    public double GrabLuma(int frames, FrameRegion region)
+    {
+        var read = (delegate* unmanaged<IntPtr, uint, uint, uint*, uint*, long*, IntPtr*, int>)Fn(_reader, Slot.ReaderReadSample);
+        for (int got = 0, empty = 0; ;)
         {
-            // Leave the camera as other apps expect it; if a setting couldn't be read, auto is the safe default.
-            Restore(camera, CameraExposure, exposureBefore);
-            if (hasAmp)
+            uint stream, flags;
+            long time;
+            IntPtr sample;
+            Check(read(_reader, FirstVideoStream, 0, &stream, &flags, &time, &sample), "read frame");
+            if ((flags & (ReaderError | ReaderEndOfStream)) != 0)
             {
-                Restore(amp, AmpGain, gainBefore);
-                Restore(amp, AmpBacklight, backlightBefore);
-                Marshal.Release(amp);
+                if (sample != IntPtr.Zero) Marshal.Release(sample);
+                throw new LightMeterException("camera stream ended (unplugged?)");
             }
-            Marshal.Release(camera);
-            Marshal.Release(reader);
+            if (sample == IntPtr.Zero) // a stream event, not a frame; a camera that only sends these is broken
+            {
+                if (++empty > 50) throw new LightMeterException("camera sends no frames");
+                continue;
+            }
+            try
+            {
+                if (++got < frames) continue;
+                return Luma(sample, region == FrameRegion.TopHalf ? _height / 2 : _height);
+            }
+            finally
+            {
+                Marshal.Release(sample);
+            }
         }
     }
 
-    (IntPtr Source, string Name) OpenCamera()
+    public void Dispose()
+    {
+        if (_amp != IntPtr.Zero) Marshal.Release(_amp);
+        Marshal.Release(_camera);
+        Marshal.Release(_reader);
+        Call(_source, Slot.MediaSourceShutdown);
+        Marshal.Release(_source);
+        MFShutdown();
+    }
+
+    static (IntPtr Source, string Name) Activate(string nameFilter)
     {
         Check(MFCreateAttributes(out IntPtr attributes, 1), "attributes");
         IntPtr* devices = null;
@@ -200,39 +288,8 @@ sealed unsafe class CameraLightMeter(string nameFilter) : ILightMeter
         return (bestWidth, bestHeight, bestYuy2);
     }
 
-    /// <summary>Reads <paramref name="frames"/> frames and returns the average luma of the last one's top half.</summary>
-    static double Grab(IntPtr reader, int width, int height, bool yuy2, int frames)
-    {
-        var read = (delegate* unmanaged<IntPtr, uint, uint, uint*, uint*, long*, IntPtr*, int>)Fn(reader, Slot.ReaderReadSample);
-        for (int got = 0, empty = 0; ;)
-        {
-            uint stream, flags;
-            long time;
-            IntPtr sample;
-            Check(read(reader, FirstVideoStream, 0, &stream, &flags, &time, &sample), "read frame");
-            if ((flags & (ReaderError | ReaderEndOfStream)) != 0)
-            {
-                if (sample != IntPtr.Zero) Marshal.Release(sample);
-                throw new LightMeterException("camera stream ended (unplugged?)");
-            }
-            if (sample == IntPtr.Zero) // a stream event, not a frame; a camera that only sends these is broken
-            {
-                if (++empty > 50) throw new LightMeterException("camera sends no frames");
-                continue;
-            }
-            try
-            {
-                if (++got < frames) continue;
-                return TopHalfLuma(sample, width, height, yuy2);
-            }
-            finally
-            {
-                Marshal.Release(sample);
-            }
-        }
-    }
-
-    static double TopHalfLuma(IntPtr sample, int width, int height, bool yuy2)
+    /// <summary>Average luma of the first <paramref name="rows"/> rows.</summary>
+    double Luma(IntPtr sample, int rows)
     {
         IntPtr buffer;
         Check(((delegate* unmanaged<IntPtr, IntPtr*, int>)Fn(sample, Slot.SampleConvertToContiguousBuffer))(sample, &buffer), "frame buffer");
@@ -244,7 +301,7 @@ sealed unsafe class CameraLightMeter(string nameFilter) : ILightMeter
             try
             {
                 // YUY2 interleaves Y U Y V; NV12 starts with the whole Y plane.
-                int pixels = width * (height / 2), stride = yuy2 ? 2 : 1;
+                int pixels = _width * rows, stride = _yuy2 ? 2 : 1;
                 if ((long)pixels * stride > length) throw new LightMeterException("short frame");
                 long sum = 0;
                 for (int i = 0; i < pixels; i++) sum += data[i * stride];
@@ -259,27 +316,6 @@ sealed unsafe class CameraLightMeter(string nameFilter) : ILightMeter
         {
             Marshal.Release(buffer);
         }
-    }
-
-    /// <summary>
-    /// Another app holding the camera (a video call) would see its picture jump while exposure is locked,
-    /// so skip. Windows records each app's camera use; a start time without a stop time means "now".
-    /// </summary>
-    static string? CameraInUse()
-    {
-        const string root = @"Software\Microsoft\Windows\CurrentVersion\CapabilityAccessManager\ConsentStore\webcam";
-        foreach (string path in new[] { root, root + @"\NonPackaged" })
-        {
-            using var key = Registry.CurrentUser.OpenSubKey(path);
-            if (key is null) continue;
-            foreach (string app in key.GetSubKeyNames())
-            {
-                using var entry = key.OpenSubKey(app);
-                if (entry?.GetValue("LastUsedTimeStart") is long start && start > 0 && entry.GetValue("LastUsedTimeStop") is 0L)
-                    return Path.GetFileName(app.Replace('#', '\\'));
-            }
-        }
-        return null;
     }
 
     // ---- COM plumbing: Media Foundation interfaces called through their vtables -----------------
@@ -300,7 +336,6 @@ sealed unsafe class CameraLightMeter(string nameFilter) : ILightMeter
     const uint FirstVideoStream = 0xFFFFFFFC;
     const uint ReaderError = 0x1, ReaderEndOfStream = 0x2;
     const int CameraExposure = 4, AmpBacklight = 8, AmpGain = 9;
-    const int Auto = 1, Manual = 2;
 
     static readonly Guid IidMediaSource = new("279a808d-aec7-40c8-9c6b-a6b492c78a66");
     static readonly Guid IidCameraControl = new("c6e13370-30ac-11d0-a18c-00a0c9118956");
@@ -317,29 +352,27 @@ sealed unsafe class CameraLightMeter(string nameFilter) : ILightMeter
 
     static void Call(IntPtr obj, int slot) => ((delegate* unmanaged<IntPtr, int>)Fn(obj, slot))(obj);
 
-    static void GetRange(IntPtr control, int property, out int min, out int max)
+    static (int Min, int Max)? GetRange(IntPtr control, int property)
     {
         int lo, hi, step, def, caps;
-        Check(((delegate* unmanaged<IntPtr, int, int*, int*, int*, int*, int*, int>)Fn(control, Slot.PropGetRange))(control, property, &lo, &hi, &step, &def, &caps), "exposure range");
-        (min, max) = (lo, hi);
-    }
-
-    static (int Value, int Flags)? Get(IntPtr control, int property)
-    {
-        int value, flags;
-        return ((delegate* unmanaged<IntPtr, int, int*, int*, int>)Fn(control, Slot.PropGet))(control, property, &value, &flags) >= 0
-            ? (value, flags)
+        return ((delegate* unmanaged<IntPtr, int, int*, int*, int*, int*, int*, int>)Fn(control, Slot.PropGetRange))(control, property, &lo, &hi, &step, &def, &caps) >= 0
+            ? (lo, hi)
             : null;
     }
 
-    static void Restore(IntPtr control, int property, (int Value, int Flags)? before)
+    static ControlValue? Get(IntPtr control, int property)
     {
-        if (before is { } b) SetProp(control, property, b.Value, b.Flags);
-        else SetProp(control, property, 0, Auto);
+        int value, flags;
+        return ((delegate* unmanaged<IntPtr, int, int*, int*, int>)Fn(control, Slot.PropGet))(control, property, &value, &flags) >= 0
+            ? new ControlValue(value, flags)
+            : null;
     }
 
-    static void SetProp(IntPtr control, int property, int value, int flags) =>
-        ((delegate* unmanaged<IntPtr, int, int, int, int>)Fn(control, Slot.PropSet))(control, property, value, flags);
+    static void SetProp(IntPtr control, int property, ControlValue? value)
+    {
+        var (v, flags) = value is { } c ? (c.Value, c.Flags) : (0, ControlValue.AutoFlag);
+        ((delegate* unmanaged<IntPtr, int, int, int, int>)Fn(control, Slot.PropSet))(control, property, v, flags);
+    }
 
     static void Check(int hr, string what)
     {

@@ -1,5 +1,6 @@
 using System.Globalization;
 using System.Runtime.InteropServices;
+using ThemeSwitch.Core;
 
 namespace ThemeSwitch;
 
@@ -15,88 +16,83 @@ interface IBrightnessDisplay
 }
 
 /// <summary>
-/// External monitors over DDC/CI (the monitor's own control channel on the video cable), through the
-/// Monitor Configuration API in dxva2.dll. Monitors that don't answer (TVs, most laptop panels) are skipped.
+/// External monitors over DDC/CI (the monitor's own control channel on the video cable). Each monitor is
+/// driven through <see cref="DisplayController"/> with its <see cref="DisplayProfile"/>; monitors that
+/// don't answer (TVs, most laptop panels) are skipped.
 /// </summary>
 sealed class DdcDisplays(string nameFilter) : IBrightnessDisplay
 {
-    const byte Brightness = 0x10, Contrast = 0x12;
-    /// <summary>DDC/CI wants a gap between commands; a Dell P2423D silently drops a write that comes too soon.</summary>
-    const int CommandGapMs = 150;
-
     public IReadOnlyList<string> Names()
     {
         var names = new List<string>();
-        Each((_, name) => names.Add(name));
+        Each(c => names.Add(c.Name));
         return names;
     }
 
     public int? Read()
     {
         int? value = null;
-        Each((handle, _) => value ??= Get(handle, Brightness));
+        Each(c => value ??= c.ReadBrightness());
         return value;
     }
 
     public bool Write(int percent, bool includeContrast)
     {
         bool ok = true;
-        Each((handle, _) =>
-        {
-            ok &= Set(handle, Brightness, percent);
-            if (includeContrast) ok &= Set(handle, Contrast, percent);
-        });
+        Each(c => ok &= c.Write(percent, includeContrast));
         return ok;
     }
 
-    /// <summary>Runs <paramref name="action"/> for every matching monitor that answers DDC/CI, then releases the handles.</summary>
-    void Each(Action<IntPtr, string> action)
+    /// <summary>Runs <paramref name="action"/> for every matching monitor that answers, then releases the handles.</summary>
+    void Each(Action<DisplayController> action)
     {
-        var monitors = new List<IntPtr>();
-        EnumDisplayMonitors(IntPtr.Zero, IntPtr.Zero, (h, _, _, _) => { monitors.Add(h); return true; }, IntPtr.Zero);
-        foreach (var monitor in monitors)
+        foreach (var monitor in Dxva2DdcChannel.Monitors())
         {
-            if (!GetNumberOfPhysicalMonitorsFromHMONITOR(monitor, out uint count) || count == 0) continue;
-            var physical = new PhysicalMonitor[count];
-            if (!GetPhysicalMonitorsFromHMONITOR(monitor, count, physical)) continue;
-            try
+            using (monitor)
             {
-                foreach (var p in physical)
+                foreach (var channel in monitor.Channels)
                 {
-                    if (nameFilter.Length > 0 && !p.Description.Contains(nameFilter, StringComparison.OrdinalIgnoreCase)) continue;
-                    if (Get(p.Handle, Brightness) is null) continue;
-                    action(p.Handle, p.Description);
+                    if (nameFilter.Length > 0 && !channel.Name.Contains(nameFilter, StringComparison.OrdinalIgnoreCase)) continue;
+                    var controller = new DisplayController(channel, DisplayProfile.For(channel.Name), Thread.Sleep);
+                    if (controller.ReadBrightness() is null) continue;
+                    action(controller);
                 }
-            }
-            finally
-            {
-                DestroyPhysicalMonitors(count, physical);
             }
         }
     }
+}
 
-    /// <summary>The value as a percentage of the monitor's own maximum (usually 100 already).</summary>
-    static int? Get(IntPtr handle, byte code) =>
-        GetVCPFeatureAndVCPFeatureReply(handle, code, IntPtr.Zero, out uint current, out uint max) && max > 0
-            ? (int)Math.Round(current * 100.0 / max)
-            : null;
+/// <summary>The DDC/CI channel: VCP codes through the Monitor Configuration API in dxva2.dll.</summary>
+sealed class Dxva2DdcChannel(IntPtr handle, string name) : IMonitorChannel
+{
+    public string Name => name;
 
-    static bool Set(IntPtr handle, byte code, int percent)
+    public (int Current, int Max)? Read(byte code) =>
+        GetVCPFeatureAndVCPFeatureReply(handle, code, IntPtr.Zero, out uint current, out uint max) ? ((int)current, (int)max) : null;
+
+    public bool Write(byte code, int value) => SetVCPFeature(handle, code, (uint)Math.Max(0, value));
+
+    /// <summary>The physical monitors behind one display; disposing releases their handles.</summary>
+    public sealed class Group(PhysicalMonitor[] physical) : IDisposable
     {
-        if (!GetVCPFeatureAndVCPFeatureReply(handle, code, IntPtr.Zero, out _, out uint max) || max == 0) return false;
-        uint raw = (uint)Math.Round(Math.Clamp(percent, 0, 100) * max / 100.0);
-        for (int attempt = 0; attempt < 3; attempt++)
+        public IEnumerable<Dxva2DdcChannel> Channels => physical.Select(p => new Dxva2DdcChannel(p.Handle, p.Description));
+        public void Dispose() => DestroyPhysicalMonitors((uint)physical.Length, physical);
+    }
+
+    public static IEnumerable<Group> Monitors()
+    {
+        var displays = new List<IntPtr>();
+        EnumDisplayMonitors(IntPtr.Zero, IntPtr.Zero, (h, _, _, _) => { displays.Add(h); return true; }, IntPtr.Zero);
+        foreach (var display in displays)
         {
-            Thread.Sleep(CommandGapMs); // also after the reads just before
-            SetVCPFeature(handle, code, raw);
-            Thread.Sleep(CommandGapMs);
-            if (GetVCPFeatureAndVCPFeatureReply(handle, code, IntPtr.Zero, out uint now, out _) && now == raw) return true;
+            if (!GetNumberOfPhysicalMonitorsFromHMONITOR(display, out uint count) || count == 0) continue;
+            var physical = new PhysicalMonitor[count];
+            if (GetPhysicalMonitorsFromHMONITOR(display, count, physical)) yield return new Group(physical);
         }
-        return false;
     }
 
     [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Unicode)]
-    struct PhysicalMonitor
+    public struct PhysicalMonitor
     {
         public IntPtr Handle;
         [MarshalAs(UnmanagedType.ByValTStr, SizeConst = 128)] public string Description;

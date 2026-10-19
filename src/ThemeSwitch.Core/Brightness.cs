@@ -1,39 +1,5 @@
 namespace ThemeSwitch.Core;
 
-/// <summary>
-/// Turns a webcam frame's average luma at a fixed gain and a known exposure into a room light level on a
-/// log2 scale: +1 means twice the light. The camera's own auto exposure would pull every scene towards
-/// mid-grey, so the meter locks exposure and walks it until the frame is well inside the sensor's range.
-/// </summary>
-public static class LightLevel
-{
-    /// <summary>Video-range black: Y=16 is black, Y=235 is white.</summary>
-    const double Black = 16, White = 235;
-    /// <summary>Fitted on a Logitech Brio 500: makes adjacent exposure steps agree within ~0.3 levels.</summary>
-    const double Gamma = 1.6;
-
-    public const int StartExposure = -7;
-    /// <summary>Longer than 1/64 s runs into the 30 fps frame time and stops adding light.</summary>
-    public const int LongestExposure = -6;
-    public const double LowLuma = 60, HighLuma = 200;
-
-    /// <param name="exposureLog2">UVC exposure: the time is 2^exposureLog2 seconds.</param>
-    public static double FromLuma(double meanLuma, int exposureLog2)
-    {
-        double signal = Math.Clamp((meanLuma - Black) / (White - Black), 0.002, 1);
-        return Math.Log2(Math.Pow(signal, Gamma)) - exposureLog2;
-    }
-
-    /// <summary>The exposure to try next, or null when this frame is good enough (or the camera can't go further).</summary>
-    public static int? NextExposure(int exposureLog2, double meanLuma, int shortest, int longest)
-    {
-        longest = Math.Min(longest, LongestExposure);
-        if (meanLuma < LowLuma && exposureLog2 < longest) return exposureLog2 + 1;
-        if (meanLuma > HighLuma && exposureLog2 > shortest) return exposureLog2 - 1;
-        return null;
-    }
-}
-
 /// <summary>A manual adjustment: at this light level the user wanted this much.</summary>
 public sealed record BrightnessPoint(double Level, int Percent, DateTime AtUtc);
 
